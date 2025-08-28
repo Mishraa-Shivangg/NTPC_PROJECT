@@ -7,48 +7,52 @@ import schedule
 import os
 
 devices = pd.read_csv('devices.csv')
-
 downtime_log = 'downtime_log.csv'
 
-previous_status = {device['ip_address']: 'unknown' for index, device in devices.iterrows()}
+if not os.path.isfile(downtime_log):
+    with open(downtime_log, 'w', newline='') as csvfile:
+        fieldnames = ['timestamp', 'device', 'ip_address', 'status']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
 
 def check_availability():
-    global previous_status
-
-    file_exists = os.path.isfile(downtime_log)
-
     with open(downtime_log, 'a', newline='') as csvfile:
         fieldnames = ['timestamp', 'device', 'ip_address', 'status']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        if not file_exists:
-            writer.writeheader()
-        
-        for index, device in devices.iterrows():
-            ip = device['ip_address']
-            name = device['name']
-            status = "up"
-            
+        for _, row in devices.iterrows():
+            ip = row['ip_address']
+            name = row['name']
+            status = "down"   # assume down by default
+
             try:
-                success_count = sum(ping(ip) is not None for _ in range(5))
-                if success_count == 0:
-                    status = "down"
-                    
+                # Try 3 pings, each with 2 sec timeout
+                success_count = 0
+                for _ in range(5):
+                    resp = ping(ip, timeout=2, unit='ms')
+                    if resp is not None and isinstance(resp, (int, float)) and resp > 0:
+                        success_count += 1
+
+                if success_count > 0:
+                    status = "up"
+
             except errors.PingError:
                 status = "down"
-            
-            if previous_status[ip] != status:
-                writer.writerow({
-                    'timestamp': datetime.now(),
-                    'device': name,
-                    'ip_address': ip,
-                    'status': status
-                })
-                
-                previous_status[ip] = status
+            except Exception:
+                status = "down"
 
+            writer.writerow({
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'device': name,
+                'ip_address': ip,
+                'status': status
+            })
+            csvfile.flush()
+
+# Run every 10 seconds
 schedule.every(10).seconds.do(check_availability)
 
 while True:
     schedule.run_pending()
     time.sleep(1)
+
